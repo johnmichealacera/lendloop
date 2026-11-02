@@ -1,0 +1,48 @@
+{
+  "id": "lendloopPing00001",
+  "name": "LendLoop 00 – Ping (reachability check)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "lendloop-ping",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1c0e5b0-0000-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "5d6f1b8e-2a4c-4f7e-9b1a-6c3e0d2f4a01"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CONVEX_SITE_URL }}/health",
+        "options": { "timeout": 5000 }
+      },
+      "id": "a1c0e5b0-0000-4000-8000-000000000002",
+      "name": "Reach Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { n8n: 'ok', convex: $json.ok === true ? 'ok' : 'unreachable', at: $now.toISO() } }}",
+        "options": {}
+      },
+      "id": "a1c0e5b0-0000-4000-8000-000000000003",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Reach Convex", "type": "main", "index": 0 }]] },
+    "Reach Convex": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

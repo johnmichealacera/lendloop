@@ -1,0 +1,263 @@
+{
+  "id": "lendloopOverdue01",
+  "name": "LendLoop 02 – Daily overdue reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000001",
+      "name": "Every day 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d3e0f5b0-0000-4000-8000-000000000002",
+      "name": "Run now (testing)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n -> Convex auth: sha256=HMAC(CONVEX_CALLBACK_SECRET, \"<ts>.<METHOD> <path>.<body>\"). Body is empty for GET.\nconst crypto = require('crypto');\nconst secret = $env.CONVEX_CALLBACK_SECRET;\nif (!secret) throw new Error('CONVEX_CALLBACK_SECRET is not set');\nconst path = '/n8n/overdue-loans';\nconst ts = String(Math.floor(Date.now() / 1000));\nconst signature = 'sha256=' + crypto.createHmac('sha256', secret).update(`${ts}.GET ${path}.`).digest('hex');\nreturn [{ json: { url: `${$env.CONVEX_SITE_URL}${path}`, headers: { 'X-LendLoop-Timestamp': ts, 'X-LendLoop-Signature': signature } } }];"
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000003",
+      "name": "Sign request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000004",
+      "name": "Get overdue loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per overdue loan. Convex decides \"today\"; the idempotency key is built from its date.\nconst { date, loans } = $input.first().json;\nreturn loans.map((l) => {\n  const days = l.daysOverdue === 1 ? '1 day' : `${l.daysOverdue} days`;\n  return {\n    json: {\n      loanId: l.loanId,\n      date,\n      idempotencyKey: `reminder:${l.loanId}:${date}`,\n      to: l.borrower.email,\n      subject: `LendLoop: please return the ${l.tool.name}`,\n      text: `Hi ${l.borrower.firstName},\\n\\nThe ${l.tool.name} you borrowed was due back on ${l.endDate} (${days} ago). Please return it to its owner so they can mark it returned in LendLoop.\\n\\nThanks for keeping the loop going!\\n\\n- LendLoop`,\n    },\n  };\n});"
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000005",
+      "name": "Prepare reminders",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <localwebteamandservices@gmail.com>",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000006",
+      "name": "Send reminder",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        960,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "MeBMnF2AGbLa6sE1",
+          "name": "SMTP account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Runs once per loan. A failed email still gets a write-back (status \"failed\") so admins see it.\nconst crypto = require('crypto');\nconst secret = $env.CONVEX_CALLBACK_SECRET;\nif (!secret) throw new Error('CONVEX_CALLBACK_SECRET is not set');\n\nconst reminder = $('Prepare reminders').item.json;\nconst failed = Boolean($json.error);\nconst error = failed ? String($json.error?.message ?? $json.error).slice(0, 500) : undefined;\nconst body = JSON.stringify({\n  loanId: reminder.loanId,\n  date: reminder.date,\n  status: failed ? 'failed' : 'sent',\n  idempotencyKey: reminder.idempotencyKey,\n  ...(failed ? { error } : {}),\n});\n\nconst path = '/n8n/reminder-status';\nconst ts = String(Math.floor(Date.now() / 1000));\nconst signature = 'sha256=' + crypto.createHmac('sha256', secret).update(`${ts}.POST ${path}.${body}`).digest('hex');\nreturn {\n  json: {\n    url: `${$env.CONVEX_SITE_URL}${path}`,\n    body,\n    headers: { 'X-LendLoop-Timestamp': ts, 'X-LendLoop-Signature': signature },\n    loanId: reminder.loanId,\n    emailStatus: failed ? 'failed' : 'sent',\n  },\n};"
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000007",
+      "name": "Sign write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000008",
+      "name": "Write back status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Every loan has been processed by now. If any email or write-back failed, fail the run so the\n// error workflow (LendLoop 7) alerts someone; the rest of the loans were still handled.\nconst results = $input.all().map((item, i) => {\n  const sent = $('Sign write-back').itemMatching(i).json;\n  return { loanId: sent.loanId, email: sent.emailStatus, writeBack: item.json.error ? 'failed' : item.json.outcome };\n});\nconst problems = results.filter((r) => r.email === 'failed' || r.writeBack === 'failed');\nif (problems.length > 0) {\n  throw new Error(`Overdue reminders: ${problems.length} of ${results.length} loans had problems: ${JSON.stringify(problems)}`);\n}\nreturn [{ json: { reminded: results.length, results } }];"
+      },
+      "id": "d3e0f5b0-0000-4000-8000-000000000009",
+      "name": "Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Every day 09:00": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now (testing)": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign request": {
+      "main": [
+        [
+          {
+            "node": "Get overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get overdue loans": {
+      "main": [
+        [
+          {
+            "node": "Prepare reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare reminders": {
+      "main": [
+        [
+          {
+            "node": "Send reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reminder": {
+      "main": [
+        [
+          {
+            "node": "Sign write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign write-back": {
+      "main": [
+        [
+          {
+            "node": "Write back status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write back status": {
+      "main": [
+        [
+          {
+            "node": "Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila"
+  },
+  "active": false
+}

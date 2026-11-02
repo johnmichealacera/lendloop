@@ -8,6 +8,18 @@
  * @module
  */
 
+import type * as demo from "../demo.js";
+import type * as http from "../http.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as lib_hmac from "../lib/hmac.js";
+import type * as lib_limits from "../lib/limits.js";
+import type * as lib_notify from "../lib/notify.js";
+import type * as lib_validate from "../lib/validate.js";
+import type * as lib_verify from "../lib/verify.js";
+import type * as loans from "../loans.js";
+import type * as n8n from "../n8n.js";
+import type * as reminders from "../reminders.js";
+import type * as tools from "../tools.js";
 import type * as users from "../users.js";
 
 import type {
@@ -17,6 +29,18 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  demo: typeof demo;
+  http: typeof http;
+  "lib/auth": typeof lib_auth;
+  "lib/hmac": typeof lib_hmac;
+  "lib/limits": typeof lib_limits;
+  "lib/notify": typeof lib_notify;
+  "lib/validate": typeof lib_validate;
+  "lib/verify": typeof lib_verify;
+  loans: typeof loans;
+  n8n: typeof n8n;
+  reminders: typeof reminders;
+  tools: typeof tools;
   users: typeof users;
 }>;
 

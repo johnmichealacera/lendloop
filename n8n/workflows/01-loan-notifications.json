@@ -1,0 +1,241 @@
+{
+  "id": "lendloopLoanEvt01",
+  "name": "LendLoop 01 – Loan notifications",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-loan-event",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000001",
+      "name": "Webhook (from Convex)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "3f6a9c2e-1b4d-4e8f-a0c7-5d2e8b1f4a60"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verifies the request really came from Convex and is fresh. Rejections never reveal which check failed.\nconst crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\n\nconst secret = $env.N8N_WEBHOOK_SECRET;\nif (!secret) throw new Error('N8N_WEBHOOK_SECRET is not set'); // misconfiguration: fail loudly so Convex retries and alerts fire\n\nconst headers = $input.first().json.headers;\nconst timestamp = headers['x-lendloop-timestamp'] ?? '';\nconst signature = headers['x-lendloop-signature'] ?? '';\nconst reject = (reason) => [{ json: { action: 'reject', reason } }];\n\nif (!/^\\d+$/.test(timestamp)) return reject('missing timestamp');\nif (Math.abs(Date.now() / 1000 - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('stale timestamp (possible replay)');\n\nlet raw;\ntry {\n  raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n} catch {\n  return reject('missing body');\n}\n\n// Signature is over the raw bytes Convex sent, not re-serialized JSON.\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${raw}`).digest('hex');\nconst given = Buffer.from(signature);\nconst wanted = Buffer.from(expected);\nif (given.length !== wanted.length || !crypto.timingSafeEqual(given, wanted)) return reject('bad signature');\n\nconst payload = JSON.parse(raw);\nif (headers['x-lendloop-event-id'] !== payload.eventId) return reject('event id mismatch');\n\nconst seen = $getWorkflowStaticData('global').seen ?? {};\nif (seen[payload.eventId]) return [{ json: { action: 'duplicate', eventId: payload.eventId } }];\n\nreturn [{ json: { action: 'deliver', ...payload } }];"
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000002",
+      "name": "Verify signature + dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 3,
+        "output": "={{ ({ reject: 0, duplicate: 1, deliver: 2 })[$json.action] }}"
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000003",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        480,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: 'unauthorized' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000004",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'duplicate', eventId: $json.eventId } }}",
+        "options": {}
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000005",
+      "name": "Respond 200 (duplicate)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nconst who = p.otherParty.firstName;\nconst tool = p.tool.name;\nconst dates = p.loan.startDate === p.loan.endDate ? p.loan.startDate : `${p.loan.startDate} to ${p.loan.endDate}`;\n\nconst templates = {\n  requested: [\n    `${who} wants to borrow your ${tool}`,\n    `${who} asked to borrow your ${tool} for ${dates}.` +\n      (p.loan.message ? `\\n\\nTheir message: \"${p.loan.message}\"` : '') +\n      `\\n\\nApprove or decline it under Incoming in LendLoop.`,\n  ],\n  approved: [`${who} approved your request`, `Good news: ${who} approved your request to borrow the ${tool} for ${dates}. Arrange the pickup with them.`],\n  declined: [`Your request for the ${tool} was declined`, `${who} can't lend the ${tool} for ${dates}. Try other dates or another tool on LendLoop.`],\n  cancelled: [`${who} cancelled their request`, `${who} no longer needs your ${tool} for ${dates}. Nothing to do on your side.`],\n  returned: [`Thanks for returning the ${tool}`, `${who} marked the ${tool} as returned. Thanks for borrowing responsibly!`],\n  tool_removed: [`The ${tool} is no longer available`, `The ${tool} was removed from LendLoop, so your request for ${dates} was closed.`],\n};\n\nconst template = templates[p.event];\nif (!template) throw new Error(`Unknown event: ${p.event}`);\n\nreturn [{\n  json: {\n    eventId: p.eventId,\n    event: p.event,\n    to: p.recipient.email,\n    subject: `LendLoop: ${template[0]}`,\n    text: `Hi ${p.recipient.firstName},\\n\\n${template[1]}\\n\\n- LendLoop`,\n  },\n}];"
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000006",
+      "name": "Compose message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only reached after a successful send, so a failed send is NOT marked and Convex's retry gets through.\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen ?? {};\nconst now = Date.now();\nconst WEEK_MS = 7 * 24 * 60 * 60 * 1000;\nfor (const [id, at] of Object.entries(store.seen)) if (now - at > WEEK_MS) delete store.seen[id];\n// Send Email's output doesn't carry eventId, so read it from the step that built the message.\nstore.seen[$('Compose message').first().json.eventId] = now;\nreturn $input.all();"
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000008",
+      "name": "Remember event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'sent', eventId: $('Compose message').first().json.eventId } }}",
+        "options": {}
+      },
+      "id": "c2d0e5b0-0000-4000-8000-000000000009",
+      "name": "Respond 200 (sent)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "LendLoop <localwebteamandservices@gmail.com>",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        976,
+        400
+      ],
+      "id": "03ad1436-7894-4f68-ab2c-9244a9ddf38f",
+      "name": "Send an Email",
+      "webhookId": "474b847c-57a6-4c0e-9e2a-ced4eedfd590",
+      "retryOnFail": true,
+      "credentials": {
+        "smtp": {
+          "id": "MeBMnF2AGbLa6sE1",
+          "name": "SMTP account"
+        }
+      },
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Webhook (from Convex)": {
+      "main": [
+        [
+          {
+            "node": "Verify signature + dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature + dedupe": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 (duplicate)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compose message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose message": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember event": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 (sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        [
+          {
+            "node": "Remember event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "active": false
+}
